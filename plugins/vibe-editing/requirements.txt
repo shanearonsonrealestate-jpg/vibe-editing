@@ -1,7 +1,7 @@
 # Core Python dependencies for the clip pipeline (Python 3.10+).
 # Install:  python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
 # Heavy/optional packages (local transcription, diarization, mediapipe reframe) are listed in
-# SETUP.md — install them only if you use those paths.
+# INSTALL.md (section 3) — install them only if you use those paths.
 
 numpy
 opencv-python        # cv2 — face detection / reframe / frame analysis
