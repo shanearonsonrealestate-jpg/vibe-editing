@@ -265,6 +265,23 @@ CASES = [
     # NB the no-$ baselines "two million"->2,000,000 and the rate phrase
     # "a million a month"->$1M a month are already asserted above (R3 / R6 rate) and are
     # unchanged by this fix; the fix only ever fires when a "$" token precedes the scale word.
+    # hyphenated compounds + spoken decimals (Whisper writes "twenty-five" as one token)
+    ("twenty-five thousand", "25,000", "hyphenated compound + scale"),
+    ("twenty-five thousand dollars", "$25K", "hyphenated compound money"),
+    ("three hundred twenty-five thousand dollars", "$325K", "hundreds + hyphenated compound money"),
+    ("two point three million dollars", "$2.3M", "spoken decimal money"),
+    ("1.5 million dollars", "$1.5M", "digit decimal money"),
+    ("2.5 percent", "2.5%", "decimal percent"),
+    ("six point eight seven five percent", "6.875%", "spoken decimal percent"),
+]
+
+# Names from brand/caption-style/names.json — only run when that file is present.
+BRAND_CASES = [
+    ("I work with shane aronson and evan sophir at serhant in boca raton",
+     "I work with Shane Aronson and Evan Sophir at SERHANT. in Boca Raton", "brand names cased"),
+    ("the bogart florida team at sarhant sold a condo near misner park",
+     "the Bogard Florida Team at SERHANT. sold a condo near Mizner Park", "brand mishearings fixed"),
+    ("shane aaronson here from Serhant.", "Shane Aronson here from SERHANT.", "brand name at sentence end"),
 ]
 
 
@@ -367,7 +384,20 @@ def run():
     return passed, total, failures
 
 
+def run_brand_cases():
+    from spice_format import _brand_names_path
+    if _brand_names_path() is None:
+        print("BRAND skipped (no brand/caption-style/names.json)")
+        return 0, 0, []
+    fails = [(i, e, format_caption_text(i), l) for i, e, l in BRAND_CASES if format_caption_text(i) != e]
+    print(f"BRAND PASSED {len(BRAND_CASES) - len(fails)}/{len(BRAND_CASES)}")
+    for inp, exp, act, label in fails:
+        print(f"  [{label}]\n    input:    {inp!r}\n    expected: {exp!r}\n    actual:   {act!r}")
+    return len(BRAND_CASES) - len(fails), len(BRAND_CASES), fails
+
+
 if __name__ == "__main__":
     p, t, f = run()
+    bp, bt, bf = run_brand_cases()
     wp, wt, wf = run_word_cases()
-    sys.exit(0 if not f and not wf else 1)
+    sys.exit(0 if not f and not wf and not bf else 1)

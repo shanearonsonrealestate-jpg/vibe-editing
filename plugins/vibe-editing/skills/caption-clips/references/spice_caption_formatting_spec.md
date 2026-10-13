@@ -107,7 +107,6 @@ Acronyms: AI · ROI · CAC · LTV · EBITDA · KPI/KPIs · CTA/CTAs · B2B · B2
 
 ## Known Gaps (pending)
 - Spoken acronym variations ("B to B"→B2B, "return on investment"→ROI, "artificial intelligence"→AI) — pending the full variations list.
-- Additive compound numbers ("twenty-five thousand"=25,000) and decimal multiplicative ("2.3 million") — not yet combined cleanly.
 - Contextual millions on bare digits ("we went from 5 to 44" = $5M to $44M) — NOT auto-detected; manual review.
-- STT name misspellings (esp. the creator, the creator) — not yet mapped.
-- "etc." period retention — assumed preserved; not yet explicitly stated in Rule 2.
+- Names and their common mishearings now live in `brand/caption-style/names.json` (proper / phrases / words / misspellings). Compound numbers ("twenty-five thousand"=25,000) and spoken decimals ("two point three million dollars"=$2.3M, "six point eight seven five percent"=6.875%) are handled; a spoken decimal only becomes "X.Y" when a scale word or "percent" follows.
+- "etc." keeps its period (LOWER_ABBREV in spice_format.py); other periods are dropped per Rule 2.

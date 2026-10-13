@@ -205,6 +205,43 @@ PROPER_WORDS = {
 MISSPELLINGS = {
 }
 
+# Your own names: brand/caption-style/names.json (or $VIBE_BRAND/caption-style/names.json).
+# Kept out of this file so the kit stays white-label. Shape (every key optional):
+#   {"proper":      ["Shane", "Aronson"],                 # capitalize these words anywhere
+#    "phrases":     {"boca raton": "Boca Raton"},         # exact multi-word output, locked
+#    "words":       {"serhant": "SERHANT."},              # exact single-word output, locked
+#    "misspellings": {"aaronson": "Aronson"}}             # common transcription mishearings
+def _brand_names_path():
+    import os
+    from pathlib import Path
+    env = os.environ.get("VIBE_BRAND")
+    cands = [Path(env) / "caption-style" / "names.json"] if env else []
+    # this file is <repo>/plugins/vibe-editing/skills/caption-clips/scripts/; brand/ sits at <repo>
+    cands.append(Path(__file__).resolve().parents[5] / "brand" / "caption-style" / "names.json")
+    return next((c for c in cands if c.is_file()), None)
+
+
+def _load_brand_names():
+    import json
+    p = _brand_names_path()
+    if p is None:
+        return
+    try:
+        d = json.loads(p.read_text())
+    except (OSError, ValueError) as e:
+        print(f"spice_format: ignoring {p}: {e}", file=sys.stderr)
+        return
+    PROPER_WORDS.update(d.get("proper", []))
+    for k, v in d.get("words", {}).items():
+        DICT_SINGLE[k.lower()] = v
+    for k, v in d.get("phrases", {}).items():
+        DICT_PHRASES.append((k.lower().split(), v.split()))
+    for k, v in d.get("misspellings", {}).items():
+        MISSPELLINGS[k.lower()] = v
+
+
+_load_brand_names()
+
 # Case-insensitive lookup table built from PROPER_WORDS.
 # Used by apply_capitalization so "elon" -> "Elon", "vegas" -> "Vegas", etc.
 # (The dict check `core in PROPER_WORDS` is case-sensitive and misses lowercase inputs.)
@@ -237,6 +274,14 @@ SCALES = {
 }
 
 MONEY_WORDS = {"dollar", "dollars", "grand"}
+
+
+def _hyphen_num(w):
+    """'twenty-five' -> 25 (STT often hyphenates tens-ones). None for anything else."""
+    m = re.fullmatch(r"([a-z]+)-([a-z]+)", w)
+    if m and m.group(1) in TENS and m.group(2) in ONES and 0 < ONES[m.group(2)] < 10:
+        return TENS[m.group(1)] + ONES[m.group(2)]
+    return None
 
 # Spoken-money SHORTHAND scale units: a numeric quantity spoken immediately before one
 # of these slang/abbreviated units is money written compactly with a symbol + suffix
@@ -514,6 +559,11 @@ def _collect_number_run(tokens, i):
             saw_number = True
             used += 1
             j += 1
+        elif _hyphen_num(w) is not None:
+            current += _hyphen_num(w)
+            saw_number = True
+            used += 1
+            j += 1
         elif w in TENS:
             current += TENS[w]
             saw_number = True
@@ -549,6 +599,55 @@ def _collect_number_run(tokens, i):
         return None
     value = total + current
     return value, j, used
+
+
+_DEC_RE = re.compile(r"\d+\.\d+")
+_DEC_FOLLOW = {"thousand", "million", "billion", "trillion", "percent", "percentage"}
+
+
+def _is_num_word(w):
+    return w in ONES or w in TENS or w == "hundred" or _hyphen_num(w) is not None
+
+
+def apply_spoken_decimals(tokens):
+    """'two point three million' -> '2.3 million'; 'two point five percent' -> '2.5 percent'.
+
+    Only when the decimal is followed by a scale word or percent, so 'at one point three
+    people left' is left alone. Runs before apply_number_words, which then folds the
+    decimal into the scale ('2.3 million' -> 2300000)."""
+    out = []
+    i, n = 0, len(tokens)
+    while i < n:
+        tok = tokens[i]
+        if (not tok.locked and lc(tok.text) == "point" and out):
+            # integer part: the number-word run (or a digit token) right before "point"
+            s = len(out)
+            while s > 0 and not out[s - 1].locked and _is_num_word(lc(out[s - 1].text)):
+                s -= 1
+            int_val = None
+            if s < len(out):
+                run = _collect_number_run(out, s)
+                if run is not None and run[1] == len(out):
+                    int_val = run[0]
+            elif out and not out[-1].locked and parse_int_token(out[-1].text) is not None:
+                s, int_val = len(out) - 1, parse_int_token(out[-1].text)
+            # fractional digits: single digit words after "point"
+            j, frac = i + 1, ""
+            while j < n and not tokens[j].locked and lc(tokens[j].text) in ONES \
+                    and ONES[lc(tokens[j].text)] < 10:
+                frac += str(ONES[lc(tokens[j].text)])
+                j += 1
+            if int_val is not None and frac and j < n and lc(tokens[j].text) in _DEC_FOLLOW:
+                consumed = out[s:] + tokens[i:j]
+                newtok = Token(f"{int_val}.{frac}", lead=consumed[0].lead, trail=tokens[j - 1].trail,
+                               space_before=consumed[0].space_before, spoken=True,
+                               src=_merge_src(*consumed))
+                out = out[:s] + [newtok]
+                i = j
+                continue
+        out.append(tok)
+        i += 1
+    return out
 
 
 def apply_number_words(tokens):
@@ -600,6 +699,16 @@ def apply_number_words(tokens):
                 out.append(tok)
                 i += 1
                 continue
+            # Decimal quantity + scale: "2.3 million" -> 2300000 (was "2.3 1,000,000").
+            if w != "hundred" and not prev.locked and _DEC_RE.fullmatch(prev.text):
+                val = Decimal(prev.text) * SCALES[w]
+                if val == val.to_integral_value():
+                    prev.text = str(int(val))
+                    prev.spoken = True
+                    prev.trail = tok.trail
+                    prev.src = _merge_src(prev, tok)
+                    i += 1
+                    continue
 
         run = _collect_number_run(tokens, i)
         if run is not None:
@@ -1180,6 +1289,13 @@ def apply_symbols_multipliers(tokens):
             prev = out[-1]
             pv = parse_int_token(prev.text)
             pw = lc(prev.text)
+            if pv is None and not prev.locked and _DEC_RE.fullmatch(prev.text):  # "2.5 percent" -> 2.5%
+                prev.text = f"{prev.text}%"
+                prev.locked = True
+                prev.trail = tok.trail or prev.trail
+                prev.src = _merge_src(prev, tok)
+                i += 1
+                continue
             if pv is not None and not prev.locked:
                 prev.text = f"{_num_for_suffix(pv, prev)}%"
                 prev.locked = True
@@ -1405,6 +1521,7 @@ def format_caption_text(text: str) -> str:
     tokens = tokenize(text)
     tokens = apply_misspellings(tokens)        # Step 0: STT error correction
     tokens = apply_dictionary(tokens)          # Rule 9 (dict) FIRST
+    tokens = apply_spoken_decimals(tokens)     # Rule 3a: "two point five million" -> "2.5 million"
     tokens = apply_number_words(tokens)        # Rule 3
     tokens = apply_one_vs_1(tokens)            # Rule 4 (the "one" decision)
     tokens = apply_listicle_sequence(tokens)   # Rule 5 (listicle/sequence)
@@ -1440,6 +1557,7 @@ def format_words(words):
     # SAME rule sequence as format_caption_text.
     tokens = apply_misspellings(tokens)        # Step 0: STT error correction
     tokens = apply_dictionary(tokens)
+    tokens = apply_spoken_decimals(tokens)
     tokens = apply_number_words(tokens)
     tokens = apply_one_vs_1(tokens)
     tokens = apply_listicle_sequence(tokens)

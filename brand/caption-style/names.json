@@ -1,0 +1,27 @@
+{
+  "proper": ["Shane", "Aronson", "Evan", "Sophir", "Bogard", "Florida", "Boca", "Raton", "Mizner"],
+  "phrases": {
+    "bogard florida team": "Bogard Florida Team",
+    "bogart florida team": "Bogard Florida Team",
+    "bogart florida": "Bogard Florida",
+    "boca raton": "Boca Raton",
+    "mizner park": "Mizner Park",
+    "misner park": "Mizner Park"
+  },
+  "words": {
+    "serhant": "SERHANT."
+  },
+  "misspellings": {
+    "aaronson": "Aronson",
+    "aronsen": "Aronson",
+    "arenson": "Aronson",
+    "sofir": "Sophir",
+    "sofeer": "Sophir",
+    "sophire": "Sophir",
+    "mizzner": "Mizner",
+    "sarhant": "serhant",
+    "sirhant": "serhant",
+    "serhan": "serhant",
+    "serhaunt": "serhant"
+  }
+}
