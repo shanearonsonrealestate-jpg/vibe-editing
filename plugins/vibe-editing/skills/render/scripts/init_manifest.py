@@ -78,6 +78,8 @@ def main():
         preset = "talking-head"
     elif a.pipeline == "qa":
         preset = "stage"
+    elif a.pipeline == "podcast":
+        preset = "podcast"
     else:
         preset = "talking-head"
 
@@ -89,6 +91,14 @@ def main():
         reframe_cfg  = {"preset": preset, "zoom": 1.4, "eye_y": 0.30, "res": "4k"}
         captions_cfg = {"preset": SPEAKER_SPICE58, "no_layout": True}  # static y≈58 (tank-top/mic line); see edit/SKILL.md locked recipe
         leadfix_cfg  = {"head_trim": 0.0}   # cut starts on the word; bump ~0.08 only if a lead beat
+    elif a.pipeline == "podcast":
+        # One camera per person (or a switched feed): the podcast preset scene-splits per angle.
+        # One wide two-shot: replace with {"split": {"segments": "all", "top": {...}, "bottom": {...}}}.
+        reframe_cfg  = {"preset": preset, "res": "4k"}
+        # speakers=2 → host white / guest yellow. Add "speaker_mics": {"host": ..., "guest": ...}
+        # when each person has their own mic track (mic-truth color instead of the director's guess).
+        captions_cfg = {"context": {"speakers": 2}}
+        leadfix_cfg  = {"head_trim": 0.063605}
     else:  # qa / multicam
         reframe_cfg  = {"preset": preset, "zoom": 1.6, "res": "4k"}
         captions_cfg = {"context": None}    # layout analyzer ON (per-angle height); set "context" for guest-color hint

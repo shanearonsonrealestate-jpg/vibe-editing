@@ -58,7 +58,8 @@ try:
 except Exception:
     _snap = None
 
-VERSION = "1.3.0"  # 1.3.0: SNAP each segment in/out to inter-word silence (acoustic, _shared/snap_silence)
+VERSION = "1.4.0"  # 1.4.0: segment meta records src_in (the SNAPPED source in-time) for podcast mic coloring.
+                   # 1.3.0: SNAP each segment in/out to inter-word silence (acoustic, _shared/snap_silence)
                    #        + 12ms fade-out per seam = clean splices BY DEFAULT (no mid-word cut/pop), not
                    #        just gated by audit-audio. Falls back to the raw boundary if snap fails/degenerate;
                    #        disable via config "snap_silence": false. (Guest159 → make the cutter safe, not just caught.)
@@ -79,6 +80,7 @@ def run(work_dir, config, inputs, inputs_meta, project, manifest, out_path):
     seg_dir.mkdir(exist_ok=True)
     seg_files = []
     durs = []
+    src_ins = []
 
     do_snap = config.get("snap_silence", True) and _snap is not None
     for i, s in enumerate(segments):
@@ -120,6 +122,7 @@ def run(work_dir, config, inputs, inputs_meta, project, manifest, out_path):
             "-movflags", "+faststart", str(seg)])
         seg_files.append(seg)
         durs.append(dur)
+        src_ins.append(round(in_t, 3))
 
     # Concat with re-encode (never -c copy across segments — keyframe alignment differs)
     fc_inputs = []
@@ -141,12 +144,12 @@ def run(work_dir, config, inputs, inputs_meta, project, manifest, out_path):
     import subprocess as _sp
     boundaries = []
     cum_f = 0
-    for d, f in zip(durs, seg_files):
+    for d, f, si in zip(durs, seg_files, src_ins):
         out = _sp.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames",
                        "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", str(f)],
                       capture_output=True, text=True, check=True)
         n = int(out.stdout.strip())
-        boundaries.append({"in_frame": cum_f, "out_frame": cum_f + n, "duration_s": d})
+        boundaries.append({"in_frame": cum_f, "out_frame": cum_f + n, "duration_s": d, "src_in": si})
         cum_f += n
 
     return {"out": str(out_path), "meta": {

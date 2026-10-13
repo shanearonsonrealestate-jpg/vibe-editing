@@ -62,9 +62,30 @@ Each clip type has a stage chain defined in `pipelines/<type>.json`. Project's `
 |---|---|---|
 | `listicle` | cut → reframe → grade → captions → mix → leadfix → deliver | Rapid-fire numbered shorts (build_short.py output) |
 | `qa` | cut → reframe → grade → captions → mix → leadfix → deliver | Single-cam Q&A / hotline from the stage cam (set `reframe.preset` to `stage`). Multicam Q&A is not a pipeline yet. |
-| `podcast` (not built) | scene_split_reframe → dual_color_captions → mix → deliver | Two-speaker podcast. No `pipelines/podcast.json` yet. |
+| `podcast` | cut → reframe → grade → captions → mix → leadfix → deliver | Two-person podcast (host white / guest yellow captions). See **Podcast** below. |
 | `single` | cut → reframe → grade → captions → mix → leadfix → deliver | Single talking-head monologue (plain captions, no tabs) |
 | `anthropic-demo` | remotion_render → audio_mix → deliver | Remotion-composited 16:9 product demo |
+
+### Podcast
+
+Pick the reframe by how it was shot:
+
+- **One wide two-shot camera** → stack both people for the whole clip:
+  `"reframe": {"res": "4k", "split": {"segments": "all", "top": {"preset": "guest", "roi": [0.05,0.06,0.48,0.60]}, "bottom": {"preset": "guest", "roi": [0.52,0.06,0.95,0.60]}}}`.
+  Set each ROI to that person's side of the frame. List segment indices instead of `"all"` to mix
+  close-ups with split moments. Captions ride the 50% seam on split segments automatically.
+- **One camera per person, or an already-switched feed** → `"reframe": {"preset": "podcast", "res": "4k"}`
+  (the tracker resets at every camera cut). Add `"per_segment": true` if the cut jumps between source files.
+
+Caption color (host white, guest yellow):
+
+- **Each person has their own mic track** (best) → `"captions": {"context": {"speakers": 2}, "speaker_mics": {"host": "00_SOURCE/host.wav", "guest": "00_SOURCE/guest.wav", "offset_s": 0.0}}`.
+  The louder mic during each word decides the color (same rule as `edit/scripts/speaker_diarize.py`).
+  Mics must share the timeline of `cut.source_video`; `offset_s` = mic time minus source time.
+- **One mixed track** → leave `speaker_mics` out; the caption director colors guest turns from the
+  transcript using a podcast-specific hint.
+
+`init_manifest.py <project> --pipeline podcast` writes the per-camera skeleton.
 
 ## Stage interface
 
