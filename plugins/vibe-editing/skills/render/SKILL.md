@@ -61,9 +61,10 @@ Each clip type has a stage chain defined in `pipelines/<type>.json`. Project's `
 | Pipeline | Stages | Use for |
 |---|---|---|
 | `listicle` | cut → reframe → grade → captions → mix → leadfix → deliver | Rapid-fire numbered shorts (build_short.py output) |
-| `qa` (todo) | qa_assembly → captions → mix → deliver | Q&A multicam from stage footage |
-| `podcast` (todo) | scene_split_reframe → dual_color_captions → mix → deliver | Two-speaker podcast |
-| `single` (todo) | cut → reframe → grade → captions → mix → deliver | Single talking-head |
+| `qa` | cut → reframe → grade → captions → mix → leadfix → deliver | Single-cam Q&A / hotline from the stage cam (set `reframe.preset` to `stage`). Multicam Q&A is not a pipeline yet. |
+| `podcast` (not built) | scene_split_reframe → dual_color_captions → mix → deliver | Two-speaker podcast. No `pipelines/podcast.json` yet. |
+| `single` | cut → reframe → grade → captions → mix → leadfix → deliver | Single talking-head monologue (plain captions, no tabs) |
+| `anthropic-demo` | remotion_render → audio_mix → deliver | Remotion-composited 16:9 product demo |
 
 ## Stage interface
 
