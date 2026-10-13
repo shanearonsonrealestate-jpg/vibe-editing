@@ -1,0 +1,11 @@
+{
+  "name": "podcast",
+  "description": "Two-person podcast short (host + guest). Same stage chain as qa; differs in framing and caption color. Pick the framing that matches how it was shot (see notes).",
+  "stages": ["cut", "reframe", "grade", "captions", "mix", "leadfix"],
+  "notes": {
+    "reframe (one wide two-shot camera)": "split.segments='all' stacks host top / guest bottom for the whole clip (set split.top/bottom ROIs to each person's side of the frame). Or list only some segment indices to mix a close-up with a split payoff.",
+    "reframe (one camera per person, or a switched program feed)": "preset='podcast' (scene-split on by default: the tracker resets at every camera cut). For a cut that jumps between separate source files, use per_segment=true.",
+    "captions.speaker_mics": "If each person has their own mic/lav track, set {host, guest, offset_s} so caption color comes from whose mic is louder (white=host, yellow=guest). Without it the director colors guest turns from the transcript.",
+    "captions.layout": "split segments ride the 50% seam automatically; close-up segments sit below the chin (closeup_y_pct)."
+  }
+}

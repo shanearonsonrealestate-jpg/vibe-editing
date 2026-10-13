@@ -13,8 +13,14 @@ Config (all optional):
       "preset":  "<path to spice.json|spice_1080.json>",  # default: auto-picked by frame height
       "corrections": {"heard": "burned"},                 # per-clip word-text fixes applied to the
                                                           # transcription (e.g. "quadruple"->"quadrupled")
-      "split_seam": true                                  # (auto) ride the seam when reframe has a split;
-    }                                                     # set false ONLY to override the auto seam rule
+      "split_seam": true,                                 # (auto) ride the seam when reframe has a split;
+                                                          # set false ONLY to override the auto seam rule
+      "speaker_mics": {                                   # podcast: color host/guest from each person's mic
+        "host":  "00_SOURCE/host_lav.wav",                # (see _speakers.py; on the cut source's timeline)
+        "guest": "00_SOURCE/guest_lav.wav",
+        "offset_s": 0.0                                   # mic_time = source_time + offset_s
+      }
+    }
 Legacy manifests with {"ass": "10_WORK/captions.ass"} are honored for backward-compat by
 IGNORING that key and regenerating correct spice captions from the clip's own audio — so an
 old project can't resurrect the wrong static-.ass burn.
@@ -76,6 +82,8 @@ _DEPS = [
     _acq("caption-clips/scripts/spice_format.py"),
     _acq("caption-clips/scripts/generate_spice.py"),
     _acq("caption-clips/scripts/caption_director.py"),
+    Path(__file__).resolve().parent / "_speakers.py",
+    _acq("edit/scripts/speaker_diarize.py"),
 ]
 
 def _dep_hash() -> str:
@@ -87,22 +95,50 @@ def _dep_hash() -> str:
             h.update(b"missing")
     return h.hexdigest()[:8]
 
-VERSION = "2.4.0+" + _dep_hash()  # 2.4.0: GEN (audio-only, cached) / BURN (pixels) split — pixel-only
+VERSION = "2.6.0+" + _dep_hash()  # 2.6.0: multicam (assembly stage) color + seam. 2.5.0: speaker_mics (mic-truth host/guest color) + podcast default context.
+                                  # 2.4.0: GEN (audio-only, cached) / BURN (pixels) split — pixel-only
                                   # revisions reuse the styled caption file, skipping the ~40-80s director.
+
+
+# Two-person podcast: both people talk at length, so the default (Q&A-shaped) director hint
+# under-colors the guest. Used when pipeline=podcast and no context is set.
+PODCAST_CONTEXT = (
+    "two-person podcast clip (HOST + GUEST in conversation). Read the TRANSCRIPT and emit voice_spans "
+    "over EVERY contiguous GUEST turn (rendered YELLOW), however long; HOST turns stay WHITE. Apply the "
+    "brief-interjection rule: a 1-3 word host acknowledgment inside a guest turn is white and the guest's "
+    "continuation is a NEW span. If only one person speaks in the clip, emit NO spans.")
 
 
 def run(work_dir, config, inputs, inputs_meta, project, manifest, out_path):
     if not SPICE_CAPTION.exists():
         raise FileNotFoundError(f"spice_caption engine missing: {SPICE_CAPTION}")
     prior = inputs[list(inputs.keys())[-1]]   # grade output — the VIDEO to burn onto (pixel-dependent)
-    audio_src = inputs.get("cut") or prior    # most-upstream STABLE audio for caption GENERATION
+    audio_src = inputs.get("cut") or inputs.get("assembly") or prior  # most-upstream STABLE audio for caption GENERATION
+    # MULTICAM: the assembly stage (qa_assembly) knows each segment's EDL speaker, where it sits on the
+    # mics, and which segments are split-screen. Default caption color comes from it (mic energy, or the
+    # EDL itself when the sync says the guest mic hears the host); an explicit speaker_mics still wins.
+    asm = (inputs_meta or {}).get("assembly") or {}
 
     cap_work = Path(work_dir) / "captions_work"
     cap_work.mkdir(parents=True, exist_ok=True)
 
     # Resolve the GEN inputs (context / corrections / pinned words) — these drive the styled caption file.
     ctx = config.get("context")
+    if isinstance(ctx, dict):  # {"speakers": 2, ...} is engine/validator metadata, not a director hint
+        ctx = ctx.get("hint")
     ctx = str(ctx) if (ctx and not str(ctx).lstrip().lower().startswith("host=")) else None
+    pipeline = (manifest or {}).get("pipeline", "")
+    if ctx is None and pipeline == "podcast":
+        ctx = PODCAST_CONTEXT
+    mics = config.get("speaker_mics") or None
+    if mics:
+        if not (mics.get("host") and mics.get("guest")):
+            raise RuntimeError("captions.speaker_mics needs both 'host' and 'guest' mic paths")
+        mic_paths = {k: (Path(mics[k]) if Path(mics[k]).is_absolute() else Path(project) / mics[k])
+                     for k in ("host", "guest")}
+        for k, p in mic_paths.items():
+            if not p.exists():
+                raise FileNotFoundError(f"captions.speaker_mics.{k} not found: {p}")
     words_path = None
     if config.get("words"):
         wp = Path(config["words"])
@@ -129,6 +165,11 @@ def run(work_dir, config, inputs, inputs_meta, project, manifest, out_path):
         "corr": _fh(corr_path) if corr_path else "none",
         "words": _fh(words_path) if (words_path and words_path.exists()) else "none",
         "deps": _dep_hash(),
+        # mic files are large: key on path+size+mtime, not content
+        "mics": ({k: [str(p), p.stat().st_size, int(p.stat().st_mtime)] for k, p in mic_paths.items()}
+                 | {"offset_s": float(mics.get("offset_s", 0.0))}) if mics else "none",
+        "asm_color": [asm.get("speaker_windows"), asm.get("speaker_mics"),
+                      asm.get("speaker_color_from_edl")] if (asm and not mics) else "none",
     }, sort_keys=True).encode()).hexdigest()[:16]
     gendir = Path(work_dir) / "caption_gen_cache" / genkey
     gen_ready = (gendir / "spice_norm.json").exists() and (gendir / "director_stream.json").exists()
@@ -145,6 +186,34 @@ def run(work_dir, config, inputs, inputs_meta, project, manifest, out_path):
         r = subprocess.run(gen_cmd)
         if r.returncode != 0:
             raise SystemExit(f"captions stage FAILED (caption-gen exit {r.returncode}) — render aborted")
+        if mics:
+            import json as _jm
+            from _speakers import apply_mic_colors
+            cut_cfg = ((manifest or {}).get("stages") or {}).get("cut") or {}
+            spec_path = Path(cut_cfg.get("spec", "10_WORK/cuts.json"))
+            spec_path = spec_path if spec_path.is_absolute() else Path(project) / spec_path
+            report = apply_mic_colors(gendir / "spice_norm.json", gendir / "director_stream.json",
+                                   _jm.loads(spec_path.read_text()),
+                                   (inputs_meta.get("cut", {}) if inputs_meta else {}).get("segments") or [],
+                                   mic_paths["host"], mic_paths["guest"], float(mics.get("offset_s", 0.0)))
+            print(f"  ↳ speaker mics → {report['host_words']} host (white) / {report['guest_words']} guest "
+                  f"(yellow) words" + (f", {report['quotes_kept']} quoted word(s) kept yellow"
+                                        if report["quotes_kept"] else ""), flush=True)
+        elif asm.get("speaker_windows"):
+            from _speakers import color_words, color_from_spans
+            win = asm["speaker_windows"]
+            am = asm.get("speaker_mics") or {}
+            if asm.get("speaker_color_from_edl") or not (am.get("host") and am.get("guest")):
+                report = color_from_spans(gendir / "spice_norm.json", gendir / "director_stream.json",
+                                          [(c0, c1, sp) for c0, c1, _, sp in win])
+                how = "EDL speakers"
+            else:
+                report = color_words(gendir / "spice_norm.json", gendir / "director_stream.json",
+                                     [(c0, c1, m0, False) for c0, c1, m0, _ in win],
+                                     Path(am["host"]), Path(am["guest"]))
+                how = "speaker mics"
+            print(f"  ↳ multicam {how} → {report['host_words']} host (white) / {report['guest_words']} "
+                  f"guest (yellow) words", flush=True)
 
     # ── SPLIT-SCREEN CAPTION HEIGHT (HOUSE RULE, auto-enforced 2026-06-12) ──
     # caption-clips/SKILL.md: "caption sits in the SEAM on split-screen; below the chin on a single cam."
@@ -159,10 +228,12 @@ def run(work_dir, config, inputs, inputs_meta, project, manifest, out_path):
     no_layout = bool(config.get("no_layout"))
     layout_file = None
     reframe_cfg = ((manifest or {}).get("stages") or {}).get("reframe") or {}
-    split_segments = ((reframe_cfg.get("split") or {}).get("segments")) or []
-    split_set = set(split_segments)
-    cut_meta = inputs_meta.get("cut", {}) if inputs_meta else {}
+    split_segments = ((reframe_cfg.get("split") or {}).get("segments")) or asm.get("split_segments") or []
+    cut_meta = (inputs_meta.get("cut") or asm) if inputs_meta else {}
     segs = cut_meta.get("segments") or []
+    if split_segments == "all":
+        split_segments = list(range(len(segs)))
+    split_set = set(split_segments)
     fps = cut_meta.get("fps") or 30.0
     mixed = bool(split_set) and segs and 0 < len(split_set) < len(segs)
 

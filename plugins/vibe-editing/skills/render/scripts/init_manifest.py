@@ -78,6 +78,8 @@ def main():
         preset = "talking-head"
     elif a.pipeline == "qa":
         preset = "stage"
+    elif a.pipeline == "podcast":
+        preset = "podcast"
     else:
         preset = "talking-head"
 
@@ -89,10 +91,35 @@ def main():
         reframe_cfg  = {"preset": preset, "zoom": 1.4, "eye_y": 0.30, "res": "4k"}
         captions_cfg = {"preset": SPEAKER_SPICE58, "no_layout": True}  # static y≈58 (tank-top/mic line); see edit/SKILL.md locked recipe
         leadfix_cfg  = {"head_trim": 0.0}   # cut starts on the word; bump ~0.08 only if a lead beat
+    elif a.pipeline == "podcast":
+        # One camera per person (or a switched feed): the podcast preset scene-splits per angle.
+        # One wide two-shot: replace with {"split": {"segments": "all", "top": {...}, "bottom": {...}}}.
+        reframe_cfg  = {"preset": preset, "res": "4k"}
+        # speakers=2 → host white / guest yellow. Add "speaker_mics": {"host": ..., "guest": ...}
+        # when each person has their own mic track (mic-truth color instead of the director's guess).
+        captions_cfg = {"context": {"speakers": 2}}
+        leadfix_cfg  = {"head_trim": 0.063605}
     else:  # qa / multicam
         reframe_cfg  = {"preset": preset, "zoom": 1.6, "res": "4k"}
         captions_cfg = {"context": None}    # layout analyzer ON (per-angle height); set "context" for guest-color hint
         leadfix_cfg  = {"head_trim": 0.063605}
+
+    if a.pipeline == "multicam":
+        # Multicam replaces cut/reframe/grade with ONE assembly stage driven by an EDL + camera sync.
+        manifest = {
+            "title": title,
+            "pipeline": "multicam",
+            "stages": {
+                "assembly": {"edl": "10_WORK/edl.json", "sync": "10_WORK/qa_sync.json", "format": "qa", "res": "1080"},
+                "captions": {"context": {"speakers": 2}},  # host white / guest yellow from the assembly's mics
+                "mix": {"music": "", "voice_lufs": -16, "music_lufs": -30, "fade_in": 1.0, "fade_out": 1.5, "limiter": 0.45},
+                "leadfix": {"head_trim": 0.063605},
+            },
+            "output": {"name": f"<VIBE_NAME>_{title}_Operator_<YYYYMMDD>_V1.mp4", "dir": "20_DELIVER"},
+        }
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+        print(f"wrote {manifest_path} (fill in 10_WORK/edl.json + 10_WORK/qa_sync.json)")
+        return 0
 
     manifest = {
         "title": title,

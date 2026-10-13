@@ -1,0 +1,11 @@
+{
+  "name": "multicam",
+  "description": "Multicam Q&A / interview: host and guest each on their own camera and mic. assembly (edit/scripts/qa_assembly.py: EDL-driven angle cuts, face-tracking, split-screen, per-camera grade, both-mic mix) replaces cut/reframe/grade; captions color host white / guest yellow from the mics.",
+  "stages": ["assembly", "captions", "mix", "leadfix"],
+  "notes": {
+    "assembly.edl": "{\"segments\":[{\"cam\":\"speaker|guest|split|wide|guest_wide\",\"mic_start\":S,\"mic_end\":E,\"speaker\":\"speaker|guest\"}]} — cam = the angle on screen, speaker = who is talking, times on the mic timeline.",
+    "assembly.sync": "camera offsets (cam_time = mic_time - offset), roles, mics, speaker_mics. Template: edit/references/qa_sync.json. Set speaker_color_from_edl=true when the guest mic also hears the host (room/PA mic).",
+    "captions": "split segments ride the 50% seam automatically; color comes from the assembly unless captions.speaker_mics is set.",
+    "mix": "the assembly is already -14 LUFS; set mix.music for a bed."
+  }
+}

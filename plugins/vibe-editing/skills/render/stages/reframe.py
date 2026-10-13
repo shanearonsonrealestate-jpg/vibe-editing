@@ -33,7 +33,8 @@ Config (manifest.stages.reframe):
                                      # exactly on the cut pts duplicates the cut frame into the
                                      # previous segment's tail (float -t fuzz), and that stray
                                      # frame renders with the WRONG tracking crop for one frame.
-        "segments": [2],             # cut-segment indices (cuts.json order) to render split
+        "segments": [2],             # cut-segment indices (cuts.json order) to render split,
+                                     # or "all" (whole clip stacked: one wide two-shot podcast cam)
         "top":    {"preset": "guest", "roi": [0.08,0.06,0.40,0.45], "zoom": 1.5, "eye_y": 0.25},
         "bottom": {"preset": "guest", "roi": [0.60,0.06,0.95,0.45], "zoom": 1.5, "eye_y": 0.25},
         # ZOOM on a wide two-shot: ~1.5 = natural shoulders-up medium per tile. Do NOT crank to
@@ -202,7 +203,7 @@ def run(work_dir, config, inputs, inputs_meta, project, manifest, out_path):
     eye_y = config.get("eye_y")
     scene_split = config.get("scene_split")
     split = config.get("split") or {}
-    split_idxs = sorted(set(split.get("segments") or []))
+    split_idxs = split.get("segments") or []
 
     # PER-CUT, SINGLE PASS: reset the face tracker at each content seam so every cut is framed
     # independently (correct framing for wherever the subject is in THAT cut) — but in one render
@@ -214,6 +215,8 @@ def run(work_dir, config, inputs, inputs_meta, project, manifest, out_path):
     segs = cut_meta.get("segments") or []
     cut_frames = [int(s["out_frame"]) for s in segs[:-1] if "out_frame" in s] if len(segs) > 1 else []
 
+    # "all" = every segment is a stacked split (a podcast shot on ONE wide two-shot camera).
+    split_idxs = list(range(len(segs))) if split_idxs == "all" else sorted(set(split_idxs))
     if split_idxs and not all(0 <= i < len(segs) for i in split_idxs):
         raise RuntimeError(f"reframe.split.segments {split_idxs} out of range for {len(segs)} cut segments")
 
@@ -310,7 +313,14 @@ def run(work_dir, config, inputs, inputs_meta, project, manifest, out_path):
             "fps": cut_meta.get("fps"), "total_duration_s": cut_meta.get("total_duration_s"),
         }}
 
-    full_out = out_path.parent / (out_path.stem + "_fullpass.mp4") if split_idxs else out_path
+    # ALL-SPLIT (whole clip stacked): every frame is rebuilt from split tiles, so the single-face
+    # full pass would be thrown away — and on a wide two-shot it can trip the face gate for nothing.
+    # Skip it; the cut output supplies the audio for the assembly below.
+    all_split = bool(segs) and len(split_idxs) == len(segs)
+    if all_split:
+        full_out = Path(cut_out)
+    else:
+        full_out = out_path.parent / (out_path.stem + "_fullpass.mp4") if split_idxs else out_path
 
     cmd = ["python3", str(QA_REFRAME), str(cut_out), str(full_out),
            "--preset", preset, "--res", res]
@@ -369,7 +379,10 @@ def run(work_dir, config, inputs, inputs_meta, project, manifest, out_path):
     # Now the global Y median is pre-computed and held from t=0 even on single-segment clips.
     if y_scope == "clip" and scene_split is not True:
         cmd += ["--global-y"]  # single-camera only; multicam scene-split wants per-ANGLE Y, not one clip-wide eyeline
-    _run_reframe_gated(cmd)  # face-presence gate: aborts if the crop isn't on a face
+    if all_split:
+        print("  ↳ every segment is split-screen → single-face full pass skipped", flush=True)
+    else:
+        _run_reframe_gated(cmd)  # face-presence gate: aborts if the crop isn't on a face
 
     if split_idxs:
         fps = float(cut_meta.get("fps") or 29.97)

@@ -14,7 +14,8 @@ Usage:
 
 Resolution -> preset is auto-picked (spice.json >=2100px, else spice_1080.json) unless --preset given.
 generate_spice is resolution-adaptive on top of that, so the shadow/animation land correctly at any res.
-Requires GROQ_API_KEY (transcription). ANTHROPIC_API_KEY drives the director's color/emphasis; without
+Transcription uses GROQ_API_KEY when set (fast); without it, transcribe_lv3 falls back to local
+faster-whisper (free, slower; `pip install faster-whisper`). ANTHROPIC_API_KEY drives the director's color/emphasis; without
 it the director falls back to deterministic styling (still spice, just no LLM-chosen guest color).
 
 SPLIT MODES (2026-06-12) — the caption pipeline has two halves with different dependencies:
@@ -112,7 +113,7 @@ def do_gen(inp, gendir, env, args):
         print(f"spice_caption: pinned transcript {args.words} — transcription skipped", flush=True)
     else:
         run(["python3", str(SC / "transcribe_lv3.py"), str(inp), "--out", str(word),
-             "--start", "0", "--end", f"{dur:.3f}"], "transcribe (Groq)", env)
+             "--start", "0", "--end", f"{dur:.3f}"], "transcribe (Groq)" if env.get("GROQ_API_KEY") else "transcribe (local whisper)", env)
     if args.corrections and args.corrections.exists():
         import json as _json, re as _re
         cmap = {k.lower(): v for k, v in _json.loads(args.corrections.read_text()).items()}
@@ -254,7 +255,13 @@ def main():
     will_transcribe = (not args.burn_from) and not (args.words and Path(args.words).exists())
     groq = load_key("GROQ_API_KEY")
     if will_transcribe and not groq:
-        raise SystemExit("missing GROQ_API_KEY (transcription) — not in env or ~/.zshrc")
+        # Key-free path: transcribe_lv3 hands off to local faster-whisper. Check it's installed in
+        # the interpreter that will run it, so a missing package fails here with the fix, not mid-run.
+        chk = subprocess.run(["python3", "-c", "import faster_whisper"], capture_output=True, env=env)
+        if chk.returncode != 0:
+            raise SystemExit("no GROQ_API_KEY and faster-whisper isn't installed — either paste a free "
+                             "Groq key into config/keys.env or run: pip install faster-whisper")
+        print("  ⓘ no GROQ_API_KEY — transcribing locally with faster-whisper (free, slower)", flush=True)
     if groq:
         env["GROQ_API_KEY"] = groq
     ak = load_key("ANTHROPIC_API_KEY")
