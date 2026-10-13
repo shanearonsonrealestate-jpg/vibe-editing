@@ -31,6 +31,7 @@ def _acq(p):
         return _pl.Path(_os.path.join(VIBE_ROOT, "lib", *parts))
     return _pl.Path(_os.path.join(VIBE_SKILLS, *parts))
 def _acqv(p):
+    import pathlib as _pl
     return _pl.Path(_os.path.join(VIBE_VAULT, *[x for x in str(p).strip("/").split("/") if x]))
 if VIBE_SHARED not in _sys.path:
     _sys.path.insert(0, VIBE_SHARED)
