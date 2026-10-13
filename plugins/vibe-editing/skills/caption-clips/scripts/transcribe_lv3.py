@@ -117,7 +117,9 @@ def _transcribe_local_words(source: str, start: float, end: float) -> list[dict]
     r = subprocess.run([sys.executable, str(tl), str(source), "--out", tmp,
                         "--start", str(start), "--end", str(end)])
     if r.returncode != 0:
-        sys.exit("Local transcription failed — install it with: pip install faster-whisper")
+        sys.exit("Local transcription failed (error above). If faster-whisper is missing: "
+                 "pip install faster-whisper. The first run also downloads the whisper model, "
+                 "so it needs an internet connection once.")
     data = json.loads(Path(tmp).read_text())
     try:
         os.unlink(tmp)
