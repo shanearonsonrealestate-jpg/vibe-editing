@@ -82,16 +82,11 @@ def decide(words, host_db, guest_db):
 
 def apply_mic_colors(spice_norm: Path, stream_path: Path, cut_spec: dict, cut_segments: list,
                      host_mic: Path, guest_mic: Path, offset_s: float = 0.0) -> dict:
-    """Overwrite per-word "c" in the director stream from mic energy. Returns a small report."""
-    words = json.loads(Path(spice_norm).read_text())["words"]
-    stream = json.loads(Path(stream_path).read_text()) if Path(stream_path).exists() else {}
-    stream.setdefault("words", {})
-    stream.setdefault("voice_spans", [])
+    """Cut-stage pipelines (podcast): map clip time to source time from cuts.json + the cut meta."""
     spec_segs = cut_spec.get("segments") or []
     if len(spec_segs) != len(cut_segments):
         raise RuntimeError(f"speaker mics: cuts.json has {len(spec_segs)} segments but the cut stage "
                            f"reported {len(cut_segments)} — can't map clip time to mic time")
-
     # clip-time window of each segment, from the cut stage's own measured durations
     windows, t = [], 0.0
     for spec, meta in zip(spec_segs, cut_segments):
@@ -99,8 +94,19 @@ def apply_mic_colors(spice_norm: Path, stream_path: Path, cut_spec: dict, cut_se
         # src_in = the cut stage's SNAPPED in-point (it nudges boundaries to silence); older cut
         # caches lack it, so fall back to the raw cuts.json "in".
         src_in = float(meta.get("src_in", spec["in"]))
-        windows.append((t, t + d, src_in, bool(spec.get("source_audio") or spec.get("source_video"))))
+        windows.append((t, t + d, src_in + offset_s, bool(spec.get("source_audio") or spec.get("source_video"))))
         t += d
+    return color_words(spice_norm, stream_path, windows, host_mic, guest_mic)
+
+
+def color_words(spice_norm: Path, stream_path: Path, windows: list, host_mic: Path, guest_mic: Path) -> dict:
+    """Overwrite per-word "c" in the director stream from mic energy.
+    windows: [(clip_start, clip_end, mic_start, skip)] — clip span of each segment and where it
+    starts on the mics' timeline; skip=True keeps the director's color for that span."""
+    words = json.loads(Path(spice_norm).read_text())["words"]
+    stream = json.loads(Path(stream_path).read_text()) if Path(stream_path).exists() else {}
+    stream.setdefault("words", {})
+    stream.setdefault("voice_spans", [])
 
     host_db, guest_db, skipped = [], [], 0
     cache = {}
@@ -112,9 +118,8 @@ def apply_mic_colors(spice_norm: Path, stream_path: Path, cut_spec: dict, cut_se
         if seg is None or windows[seg][3]:
             host_db.append(None); guest_db.append(None); skipped += 1
             continue
-        c0, c1, src_in, _ = windows[seg]
+        c0, c1, m0, _ = windows[seg]
         if seg not in cache:
-            m0 = src_in + offset_s
             cache[seg] = (_decode(host_mic, m0, c1 - c0), _decode(guest_mic, m0, c1 - c0))
         ha, ga = cache[seg]
         s0 = int((float(w["start"]) - c0) * SR)
@@ -125,6 +130,25 @@ def apply_mic_colors(spice_norm: Path, stream_path: Path, cut_spec: dict, cut_se
         guest_db.append(_db(ga, s0, s1))
 
     who = decide([w.get("word", "") for w in words], host_db, guest_db)
+    return _write(stream, stream_path, who, skipped)
+
+
+def color_from_spans(spice_norm: Path, stream_path: Path, spans: list) -> dict:
+    """EDL-truth color: spans = [(clip_start, clip_end, "host"|"guest")]. For setups where the
+    guest mic also hears the host (a room/PA mic), so mic energy can't be trusted."""
+    words = json.loads(Path(spice_norm).read_text())["words"]
+    stream = json.loads(Path(stream_path).read_text()) if Path(stream_path).exists() else {}
+    stream.setdefault("words", {})
+    stream.setdefault("voice_spans", [])
+    who = []
+    for w in words:
+        mid = 0.5 * (float(w["start"]) + float(w["end"]))
+        hit = next((sp for c0, c1, sp in spans if c0 <= mid < c1), spans[-1][2] if spans else None)
+        who.append(hit)
+    return _write(stream, stream_path, who, 0)
+
+
+def _write(stream, stream_path, who, skipped):
     n_host = n_guest = kept_quotes = 0
     for i, p in enumerate(who):
         if p is None:

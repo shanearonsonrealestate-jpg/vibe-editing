@@ -53,6 +53,7 @@ def _acq(p):
         return _pl.Path(_os.path.join(VIBE_ROOT, "lib", *parts))
     return _pl.Path(_os.path.join(VIBE_SKILLS, *parts))
 def _acqv(p):
+    import pathlib as _pl
     return _pl.Path(_os.path.join(VIBE_VAULT, *[x for x in str(p).strip("/").split("/") if x]))
 if VIBE_SHARED not in _sys.path:
     _sys.path.insert(0, VIBE_SHARED)
@@ -67,9 +68,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # so sibling he
 from fast_encode import encoder_args
 from speaker_diarize import resolve_speakers   # per-word Speaker/guest (mic energy + turn-taking)
 
-REFRAME   = f"{SKILL}/scripts/qa_reframe_v2.py"                   # Y-LOCK + box-center reframe (the assembly standard)
+REFRAME   = str(_acq("horizontal-to-vertical/scripts/qa_reframe_v2.py"))  # Y-LOCK + box-center reframe (the assembly standard).
+# Canonical h2v copy: the split-panel face checks look for detect_face_dense.py NEXT TO it, and that only
+# exists in horizontal-to-vertical/scripts (from edit/scripts the checks silently skipped).
 GUEST_PANEL = _acq("horizontal-to-vertical/scripts/guest_panel_render.py")  # DYNAMIC target-framing guest split panel (2026-06-17): face=target_face_h/target_face_y solved per-frame; kills the per-guest "too big/too low" bug.
-SHADOW    = f"{SKILL}/assets/seam_shadow.png"                     # split seam drop-shadow
+SHADOW    = str(_acq("horizontal-to-vertical/assets/seam_shadow.png"))  # split seam drop-shadow (shared with make_splitscreen)
 GEN_SPICE = f"{CAPS}/scripts/generate_spice.py"
 # Per-angle caption-Y track. layout_analyze lives in the caption-app worker (shared by the
 # app and /edit — caption-clips is the caption SSOT; this is the layout/positioning tool).
@@ -152,6 +155,7 @@ def main():
     ap.add_argument("--music-ss", type=float, default=0.0, help="seek into the music track (skip intro)")
     ap.add_argument("--music-delay", type=float, default=0.0, help="delay music start in the OUTPUT timeline (seconds). Use to silence music during the split-screen Q opener and have it kick in when Speaker starts answering (per Operator review 2026-06-16: 'music should start right here' after the question).")
     ap.add_argument("--music-level", type=float, default=-28.0, help="loudnorm I for the music bed (under the -14 voice)")
+    ap.add_argument("--map-out", default=None, help="write the clip-time -> segment/cam/speaker/mic map (snapped) as JSON — the render 'assembly' stage reads it for caption seam placement + mic-based speaker color")
     ap.add_argument("--dump-map", action="store_true", help="print the clip-time -> segment/cam/mic map (for review-note translation) and exit")
     ap.add_argument("--corrections", default=None, help="JSON file of {heard: burned} word/phrase fixes applied to the transcribed words before normalization. For Whisper mishearings on the rendered audio (e.g. 'trading' should burn as 'draining').")
     a = ap.parse_args()
@@ -159,7 +163,9 @@ def main():
 
     edl = json.load(open(a.edl)); segs = edl["segments"] if isinstance(edl, dict) else edl
     sync = json.load(open(a.sync))
-    cam_dir = sync["cam_dir"]
+    # Absolute up front: later code re-prefixes any non-absolute mic path with cam_dir, so a RELATIVE
+    # cam_dir (e.g. "00_SOURCE", the template's value) became "00_SOURCE/00_SOURCE/AUDIO/..." and crashed.
+    cam_dir = os.path.abspath(os.path.expanduser(sync["cam_dir"]))
     # role -> (camfile, offset)
     role2 = {}
     for base, role in sync["roles"].items():
@@ -265,6 +271,18 @@ def main():
         r = seg2run[i]
         segdur.append((r["start"] if i == r["seg"][0] else s["mic_start"],
                        r["end"] if i == r["seg"][-1] else s["mic_end"]))
+
+    if a.map_out:
+        _t, _rows = 0.0, []
+        for i, s in enumerate(segs):
+            vs, ve = segdur[i]
+            _rows.append({"clip_start": round(_t, 3), "clip_end": round(_t + ve - vs, 3), "mic_start": round(vs, 3),
+                          "cam": s["cam"], "speaker": s.get("speaker")})
+            _t += ve - vs
+        json.dump({"fps": FPS, "segments": _rows,
+                   "speaker_mics": {k: (v if os.path.isabs(v) else f"{cam_dir}/{v}") for k, v in spk_mic.items()},
+                   "speaker_color_from_edl": bool(sync.get("speaker_color_from_edl"))},
+                  open(a.map_out, "w"), indent=1)
 
     if a.dump_map:                               # review-note translation: clip-time <-> segment/cam/mic (snapped)
         t = 0.0

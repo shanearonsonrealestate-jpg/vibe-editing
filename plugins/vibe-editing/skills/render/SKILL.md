@@ -61,7 +61,8 @@ Each clip type has a stage chain defined in `pipelines/<type>.json`. Project's `
 | Pipeline | Stages | Use for |
 |---|---|---|
 | `listicle` | cut → reframe → grade → captions → mix → leadfix → deliver | Rapid-fire numbered shorts (build_short.py output) |
-| `qa` | cut → reframe → grade → captions → mix → leadfix → deliver | Single-cam Q&A / hotline from the stage cam (set `reframe.preset` to `stage`). Multicam Q&A is not a pipeline yet. |
+| `qa` | cut → reframe → grade → captions → mix → leadfix → deliver | Single-cam Q&A / hotline from the stage cam (set `reframe.preset` to `stage`) |
+| `multicam` | assembly → captions → mix → leadfix → deliver | Q&A / interview with host and guest on separate cameras + mics. See **Multicam** below. |
 | `podcast` | cut → reframe → grade → captions → mix → leadfix → deliver | Two-person podcast (host white / guest yellow captions). See **Podcast** below. |
 | `single` | cut → reframe → grade → captions → mix → leadfix → deliver | Single talking-head monologue (plain captions, no tabs) |
 | `anthropic-demo` | remotion_render → audio_mix → deliver | Remotion-composited 16:9 product demo |
@@ -86,6 +87,29 @@ Caption color (host white, guest yellow):
   transcript using a podcast-specific hint.
 
 `init_manifest.py <project> --pipeline podcast` writes the per-camera skeleton.
+
+### Multicam
+
+For host and guest on their own cameras and mics. One `assembly` stage (wrapping
+`edit/scripts/qa_assembly.py`) replaces cut/reframe/grade:
+
+```json
+"pipeline": "multicam",
+"stages": {
+  "assembly": {"edl": "10_WORK/edl.json", "sync": "10_WORK/qa_sync.json", "format": "qa", "res": "1080"},
+  "captions": {"context": {"speakers": 2}},
+  "mix": {"music": ""},
+  "leadfix": {"head_trim": 0.063605}
+}
+```
+
+- **EDL**: `{"segments": [{"cam": "speaker|guest|split|wide|guest_wide", "mic_start": S, "mic_end": E, "speaker": "speaker|guest"}]}`.
+  `cam` is the angle on screen, `speaker` is who is talking (a guest reaction shot while the host talks is `cam: guest, speaker: speaker`).
+- **Sync** (template `edit/references/qa_sync.json`): `cam_dir`, per-camera `offsets` (cam_time = mic_time − offset) and `roles`
+  (`speaker` / `guest` / `wide`), `mics`, and `speaker_mics: {"speaker": ..., "guest": ...}`. Paths are project-relative.
+  Optional `guest_split` tunes the guest's split panel. Set `speaker_color_from_edl: true` when the guest mic also hears the host.
+- Captions ride the seam on `split` segments and are colored per word from the mics (or the EDL), with no extra config.
+- `init_manifest.py <project> --pipeline multicam` writes this skeleton.
 
 ## Stage interface
 

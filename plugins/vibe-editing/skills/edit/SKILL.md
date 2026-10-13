@@ -1199,7 +1199,7 @@ absolute path goes in `manifest.stages.mix.music`.
 - `listicle` — numbered rapid-fire, `talking-head` preset, music + leadfix.
 - `qa` — single-cam Q&A / hotline, `stage` preset.
 - `single` — monologue talking-head (no numbered tabs).
-- (multicam podcast / Q&A: TODO — adds an `assembly` stage that wraps `qa_assembly.py`.)
+- multicam Q&A / interview: `pipeline: "multicam"` — an `assembly` stage wraps `qa_assembly.py` (EDL + `qa_sync.json`), then captions → mix → leadfix. See render/SKILL.md → Multicam.
 
 **Bumping a stage's VERSION** — when a stage's code changes meaningfully, bump its `VERSION`
 constant in the stage module (`${CLAUDE_PLUGIN_ROOT}/skills/render/stages/<stage>.py`). The cache hash

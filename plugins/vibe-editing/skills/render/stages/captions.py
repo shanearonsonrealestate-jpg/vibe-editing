@@ -95,7 +95,7 @@ def _dep_hash() -> str:
             h.update(b"missing")
     return h.hexdigest()[:8]
 
-VERSION = "2.5.0+" + _dep_hash()  # 2.5.0: speaker_mics (mic-truth host/guest color) + podcast default context.
+VERSION = "2.6.0+" + _dep_hash()  # 2.6.0: multicam (assembly stage) color + seam. 2.5.0: speaker_mics (mic-truth host/guest color) + podcast default context.
                                   # 2.4.0: GEN (audio-only, cached) / BURN (pixels) split — pixel-only
                                   # revisions reuse the styled caption file, skipping the ~40-80s director.
 
@@ -113,7 +113,11 @@ def run(work_dir, config, inputs, inputs_meta, project, manifest, out_path):
     if not SPICE_CAPTION.exists():
         raise FileNotFoundError(f"spice_caption engine missing: {SPICE_CAPTION}")
     prior = inputs[list(inputs.keys())[-1]]   # grade output — the VIDEO to burn onto (pixel-dependent)
-    audio_src = inputs.get("cut") or prior    # most-upstream STABLE audio for caption GENERATION
+    audio_src = inputs.get("cut") or inputs.get("assembly") or prior  # most-upstream STABLE audio for caption GENERATION
+    # MULTICAM: the assembly stage (qa_assembly) knows each segment's EDL speaker, where it sits on the
+    # mics, and which segments are split-screen. Default caption color comes from it (mic energy, or the
+    # EDL itself when the sync says the guest mic hears the host); an explicit speaker_mics still wins.
+    asm = (inputs_meta or {}).get("assembly") or {}
 
     cap_work = Path(work_dir) / "captions_work"
     cap_work.mkdir(parents=True, exist_ok=True)
@@ -164,6 +168,8 @@ def run(work_dir, config, inputs, inputs_meta, project, manifest, out_path):
         # mic files are large: key on path+size+mtime, not content
         "mics": ({k: [str(p), p.stat().st_size, int(p.stat().st_mtime)] for k, p in mic_paths.items()}
                  | {"offset_s": float(mics.get("offset_s", 0.0))}) if mics else "none",
+        "asm_color": [asm.get("speaker_windows"), asm.get("speaker_mics"),
+                      asm.get("speaker_color_from_edl")] if (asm and not mics) else "none",
     }, sort_keys=True).encode()).hexdigest()[:16]
     gendir = Path(work_dir) / "caption_gen_cache" / genkey
     gen_ready = (gendir / "spice_norm.json").exists() and (gendir / "director_stream.json").exists()
@@ -193,6 +199,21 @@ def run(work_dir, config, inputs, inputs_meta, project, manifest, out_path):
             print(f"  ↳ speaker mics → {report['host_words']} host (white) / {report['guest_words']} guest "
                   f"(yellow) words" + (f", {report['quotes_kept']} quoted word(s) kept yellow"
                                         if report["quotes_kept"] else ""), flush=True)
+        elif asm.get("speaker_windows"):
+            from _speakers import color_words, color_from_spans
+            win = asm["speaker_windows"]
+            am = asm.get("speaker_mics") or {}
+            if asm.get("speaker_color_from_edl") or not (am.get("host") and am.get("guest")):
+                report = color_from_spans(gendir / "spice_norm.json", gendir / "director_stream.json",
+                                          [(c0, c1, sp) for c0, c1, _, sp in win])
+                how = "EDL speakers"
+            else:
+                report = color_words(gendir / "spice_norm.json", gendir / "director_stream.json",
+                                     [(c0, c1, m0, False) for c0, c1, m0, _ in win],
+                                     Path(am["host"]), Path(am["guest"]))
+                how = "speaker mics"
+            print(f"  ↳ multicam {how} → {report['host_words']} host (white) / {report['guest_words']} "
+                  f"guest (yellow) words", flush=True)
 
     # ── SPLIT-SCREEN CAPTION HEIGHT (HOUSE RULE, auto-enforced 2026-06-12) ──
     # caption-clips/SKILL.md: "caption sits in the SEAM on split-screen; below the chin on a single cam."
@@ -207,8 +228,8 @@ def run(work_dir, config, inputs, inputs_meta, project, manifest, out_path):
     no_layout = bool(config.get("no_layout"))
     layout_file = None
     reframe_cfg = ((manifest or {}).get("stages") or {}).get("reframe") or {}
-    split_segments = ((reframe_cfg.get("split") or {}).get("segments")) or []
-    cut_meta = inputs_meta.get("cut", {}) if inputs_meta else {}
+    split_segments = ((reframe_cfg.get("split") or {}).get("segments")) or asm.get("split_segments") or []
+    cut_meta = (inputs_meta.get("cut") or asm) if inputs_meta else {}
     segs = cut_meta.get("segments") or []
     if split_segments == "all":
         split_segments = list(range(len(segs)))

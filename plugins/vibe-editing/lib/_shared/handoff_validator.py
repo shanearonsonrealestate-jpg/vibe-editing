@@ -48,6 +48,7 @@ def _acq(p):
         return _pl.Path(_os.path.join(VIBE_ROOT, "lib", *parts))
     return _pl.Path(_os.path.join(VIBE_SKILLS, *parts))
 def _acqv(p):
+    import pathlib as _pl
     return _pl.Path(_os.path.join(VIBE_VAULT, *[x for x in str(p).strip("/").split("/") if x]))
 if VIBE_SHARED not in _sys.path:
     _sys.path.insert(0, VIBE_SHARED)
@@ -80,6 +81,49 @@ def _abs(project: Path, val) -> Path | None:
         return None
     p = Path(val)
     return p if p.is_absolute() else (project / p)
+
+
+def _check_assembly(project: Path, asm: dict, errors: list, warnings: list) -> None:
+    """multicam: the EDL drives which camera is on screen; the sync file maps cameras + mics."""
+    edl_p, sync_p = _abs(project, asm.get("edl")), _abs(project, asm.get("sync"))
+    if not edl_p:
+        errors.append("manifest.stages.assembly.edl is required for pipeline='multicam'")
+    elif not edl_p.exists():
+        errors.append(f"manifest.stages.assembly.edl does not exist: {edl_p}")
+    else:
+        try:
+            edl = json.loads(edl_p.read_text())
+            segs = edl["segments"] if isinstance(edl, dict) else edl
+        except Exception as e:
+            errors.append(f"EDL unparseable: {e}")
+            segs = None
+        if segs is not None:
+            if not segs:
+                errors.append("EDL has no segments — clip would be empty")
+            for i, s in enumerate(segs or []):
+                if not all(k in s for k in ("cam", "mic_start", "mic_end", "speaker")):
+                    errors.append(f"EDL segments[{i}] needs cam, mic_start, mic_end, speaker")
+                elif s["mic_end"] <= s["mic_start"]:
+                    errors.append(f"EDL segments[{i}] has mic_end<=mic_start")
+            total = sum(s["mic_end"] - s["mic_start"] for s in (segs or [])
+                        if isinstance(s.get("mic_start"), (int, float)) and isinstance(s.get("mic_end"), (int, float)))
+            if segs and not (8 <= total <= 90):
+                warnings.append(f"EDL total duration {total:.1f}s is outside 8–90s")
+    if not sync_p:
+        errors.append("manifest.stages.assembly.sync is required for pipeline='multicam'")
+    elif not sync_p.exists():
+        errors.append(f"manifest.stages.assembly.sync does not exist: {sync_p}")
+    else:
+        try:
+            sync = json.loads(sync_p.read_text())
+        except Exception as e:
+            errors.append(f"sync file unparseable: {e}")
+            return
+        for k in ("cam_dir", "offsets", "roles", "mics"):
+            if k not in sync:
+                errors.append(f"sync file is missing '{k}'")
+        if "speaker_mics" not in sync:
+            warnings.append("sync file has no speaker_mics — host/guest mics are guessed from file names")
 
 
 def validate_manifest(manifest_path: Path) -> tuple[list[str], list[str]]:
@@ -128,77 +172,81 @@ def validate_manifest(manifest_path: Path) -> tuple[list[str], list[str]]:
 
     stages = manifest.get("stages") or {}
 
-    # ── cut stage ─────────────────────────────────────────────────────────
-    cut = stages.get("cut") or {}
-    src_video = _abs(project, cut.get("source_video"))
-    if not src_video:
-        errors.append("manifest.stages.cut.source_video is required")
-    elif not src_video.exists():
-        errors.append(f"manifest.stages.cut.source_video does not exist: {src_video}")
-
-    spec = _abs(project, cut.get("spec"))
-    if not spec:
-        errors.append("manifest.stages.cut.spec is required (path to cuts.json)")
-    elif not spec.exists():
-        errors.append(f"manifest.stages.cut.spec does not exist: {spec}")
+    # ── assembly stage (multicam: EDL + camera sync replace cut/reframe) ──
+    if pipeline == "multicam":
+        _check_assembly(project, stages.get("assembly") or {}, errors, warnings)
     else:
-        # cuts.json must be valid JSON with .segments[]
-        try:
-            cuts = json.loads(spec.read_text())
-        except Exception as e:
-            errors.append(f"cuts.json unparseable: {e}")
-            cuts = None
-        if cuts is not None:
-            segs = cuts.get("segments")
-            if not isinstance(segs, list):
-                errors.append("cuts.json must have a 'segments' array")
-            elif not segs:
-                errors.append("cuts.json has no segments — clip would be empty")
-            else:
-                for i, s in enumerate(segs):
-                    if not isinstance(s, dict):
-                        errors.append(f"cuts.json segments[{i}] not an object")
-                        continue
-                    if "in" not in s or "out" not in s:
-                        errors.append(f"cuts.json segments[{i}] missing 'in' or 'out'")
-                        continue
-                    if not (isinstance(s["in"], (int, float)) and isinstance(s["out"], (int, float))):
-                        errors.append(f"cuts.json segments[{i}] 'in'/'out' must be numeric")
-                        continue
-                    if s["out"] <= s["in"]:
-                        errors.append(
-                            f"cuts.json segments[{i}] has out<=in ({s['out']} <= {s['in']})"
-                        )
-                # Total duration soft-check (Speaker format = 8–90s)
-                total = sum(s["out"] - s["in"] for s in segs
-                            if isinstance(s.get("in"), (int, float))
-                            and isinstance(s.get("out"), (int, float)))
-                if total < 8:
-                    warnings.append(
-                        f"cuts.json total duration {total:.1f}s < 8s — clip would be too short"
-                    )
-                if total > 90:
-                    warnings.append(
-                        f"cuts.json total duration {total:.1f}s > 90s — over the hard cap"
-                    )
-                # Hard-end: last segment should land on a payoff word, not a connector
-                last_text = (segs[-1].get("text") or "").strip()
-                if last_text and last_text[-1:] in {",", ";"}:
-                    warnings.append(
-                        f"last segment ends mid-clause: {last_text[-40:]!r} — hard-end rule expects "
-                        f"a full sentence terminator"
-                    )
+        # ── cut stage ─────────────────────────────────────────────────────────
+        cut = stages.get("cut") or {}
+        src_video = _abs(project, cut.get("source_video"))
+        if not src_video:
+            errors.append("manifest.stages.cut.source_video is required")
+        elif not src_video.exists():
+            errors.append(f"manifest.stages.cut.source_video does not exist: {src_video}")
 
-    # 2-speaker pipelines need a separate audio source
-    if pipeline in {"qa", "podcast", "multicam"}:
-        src_audio = _abs(project, cut.get("source_audio"))
-        if not src_audio:
-            errors.append(
-                f"manifest.stages.cut.source_audio is required for pipeline={pipeline!r} "
-                "(lav / mic file for diarization + cleaner mix)"
-            )
-        elif not src_audio.exists():
-            errors.append(f"manifest.stages.cut.source_audio does not exist: {src_audio}")
+        spec = _abs(project, cut.get("spec"))
+        if not spec:
+            errors.append("manifest.stages.cut.spec is required (path to cuts.json)")
+        elif not spec.exists():
+            errors.append(f"manifest.stages.cut.spec does not exist: {spec}")
+        else:
+            # cuts.json must be valid JSON with .segments[]
+            try:
+                cuts = json.loads(spec.read_text())
+            except Exception as e:
+                errors.append(f"cuts.json unparseable: {e}")
+                cuts = None
+            if cuts is not None:
+                segs = cuts.get("segments")
+                if not isinstance(segs, list):
+                    errors.append("cuts.json must have a 'segments' array")
+                elif not segs:
+                    errors.append("cuts.json has no segments — clip would be empty")
+                else:
+                    for i, s in enumerate(segs):
+                        if not isinstance(s, dict):
+                            errors.append(f"cuts.json segments[{i}] not an object")
+                            continue
+                        if "in" not in s or "out" not in s:
+                            errors.append(f"cuts.json segments[{i}] missing 'in' or 'out'")
+                            continue
+                        if not (isinstance(s["in"], (int, float)) and isinstance(s["out"], (int, float))):
+                            errors.append(f"cuts.json segments[{i}] 'in'/'out' must be numeric")
+                            continue
+                        if s["out"] <= s["in"]:
+                            errors.append(
+                                f"cuts.json segments[{i}] has out<=in ({s['out']} <= {s['in']})"
+                            )
+                    # Total duration soft-check (Speaker format = 8–90s)
+                    total = sum(s["out"] - s["in"] for s in segs
+                                if isinstance(s.get("in"), (int, float))
+                                and isinstance(s.get("out"), (int, float)))
+                    if total < 8:
+                        warnings.append(
+                            f"cuts.json total duration {total:.1f}s < 8s — clip would be too short"
+                        )
+                    if total > 90:
+                        warnings.append(
+                            f"cuts.json total duration {total:.1f}s > 90s — over the hard cap"
+                        )
+                    # Hard-end: last segment should land on a payoff word, not a connector
+                    last_text = (segs[-1].get("text") or "").strip()
+                    if last_text and last_text[-1:] in {",", ";"}:
+                        warnings.append(
+                            f"last segment ends mid-clause: {last_text[-40:]!r} — hard-end rule expects "
+                            f"a full sentence terminator"
+                        )
+
+        # 2-speaker pipelines need a separate audio source
+        if pipeline in {"qa", "podcast"}:
+            src_audio = _abs(project, cut.get("source_audio"))
+            if not src_audio:
+                errors.append(
+                    f"manifest.stages.cut.source_audio is required for pipeline={pipeline!r} "
+                    "(lav / mic file for diarization + cleaner mix)"
+                )
+            elif not src_audio.exists():
+                errors.append(f"manifest.stages.cut.source_audio does not exist: {src_audio}")
 
     # ── reframe stage ─────────────────────────────────────────────────────
     reframe = stages.get("reframe") or {}

@@ -157,7 +157,7 @@ def emit_contract(project: Path, manifest: dict, delivered: Path, contract_path:
     # Speaker setup → caption color map (context may be a free-text string or a dict)
     _ctx = stages.get("captions", {}).get("context") or {}
     speakers = ((_ctx.get("speakers") if isinstance(_ctx, dict) else None)
-                or (2 if pipeline in ("qa", "podcast") else 1))
+                or (2 if pipeline in ("qa", "podcast", "multicam") else 1))
     if int(speakers) == 2:
         color_map = {"host": "white", "guest": "yellow"}
     else:
