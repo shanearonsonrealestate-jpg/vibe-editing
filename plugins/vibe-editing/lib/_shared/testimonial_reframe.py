@@ -31,6 +31,7 @@ VIBE_SKILLS = _os.path.join(VIBE_ROOT, "skills")
 VIBE_VAULT  = _os.path.join(VIBE_ROOT, "vault")
 VIBE_ASSETS = _os.environ.get("VIBE_ASSETS") or _os.path.join(VIBE_ROOT, "assets")
 def _acq(p):
+    import pathlib as _pl
     parts = [x for x in str(p).strip("/").split("/") if x]
     if parts and parts[0] == "_shared":
         return _pl.Path(_os.path.join(VIBE_ROOT, "lib", *parts))
